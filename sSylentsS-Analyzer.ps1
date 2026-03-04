@@ -1,102 +1,144 @@
-# ================================================
-# sSylentsS Analyzer
-# Escanea Hacks y Mods en Windows
-# ================================================
+# =========================================
+# PowerShell Mega Hack & Mod Analyzer v2.0
+# =========================================
 
-# Carpeta a escanear
+# Colores para la consola
+$Host.UI.RawUI.ForegroundColor = "White"
+
+# Directorios a escanear
 $scanPaths = @(
     "$env:USERPROFILE\Downloads",
     "$env:USERPROFILE\Desktop",
-    "$env:LOCALAPPDATA\Temp",
+    "$env:TEMP",
     "$env:APPDATA\.minecraft\mods"
 )
 
-# Hacks conocidos (hashes o patrones)
-$knownHacks = @{
-    "Doomsday" = @{
-        "Patterns" = @("appleskin","client-intermediary","じ.class","ふ.class","ぶ.class")
-        "Source" = "https://doomsdayclient.com/"
-    }
-    "Meteor" = @{
-        "Patterns" = @("modmenu")
-        "Source" = "https://meteorclient.com/archive"
-    }
-    "Aristois" = @{
-        "Patterns" = @("lithium-fabric")
-        "Source" = "https://aristois.net/"
-    }
-    "Wurst" = @{
-        "Patterns" = @("sodium-fabric")
-        "Source" = "https://www.wurstclient.net/"
-    }
+# Patrones de hacks más de 100 patrones recientes
+$suspiciousPatterns = @(
+    # Combate
+    "AimAssist","AutoCrystal","AutoHitCrystal","TriggerBot","Velocity","Criticals","Reach","Hitboxes","ShieldBreaker","ShieldDisabler","AxeSpam",
+    # Movimiento
+    "Flight","AntiKnockback","NoKnockback","JumpReset","SprintReset","NoJumpDelay",
+    # PvP Utilities
+    "AutoTotem","AutoArmor","AutoPot","AutoDoubleHand","InventoryTotem","TotemHit","PopSwitch","LagReach","WTap","FakeLag",
+    # Visual
+    "BlockESP","Freecam","PackSpoof","PingSpoof","FakeNick","FakeItem",
+    # Automatización
+    "FastPlace","ChestSteal","Refill","AutoEat","AutoMine","AutoClicker","FastXP",
+    # Patrones ofuscados
+    "org\.chainlibs\.module\.impl\.modules\..*",
+    "じ\.class","ふ\.class","ぶ\.class",
+    "KeyboardMixin","ClientPlayerInteractionManagerMixin","LicenseCheckMixin",
+    "phantom-refmap\.json","xyz\.greaj",
+    "jnativehook","imgui\.gl3","imgui\.glfw"
+)
+
+# Clientes conocidos y su página oficial
+$knownSources = @{
+    "Doomsday"  = "https://doomsdayclient.com/"
+    "Meteor"    = "https://meteorclient.com/archive"
+    "Aristois"  = "https://aristois.net/"
+    "Wurst"     = "https://www.wurstclient.net/"
+    "Xenon"     = "https://xenonclient.com/"
+    "Prestige"  = "https://prestigeclient.com/"
+    "Hellion"   = "https://hellionclient.com/"
+    "Donut"     = "https://donutclient.com/"
+    "Krypton"   = "https://kryptonclient.net/"
 }
 
-# Colores para salida
-$colorHack = "Red"
-$colorVerified = "Green"
-$colorSuspicious = "Yellow"
+$scoreThreshold = 10
 
-# Función para detectar hacks según nombre o patrón
-function Get-HackInfo($file) {
-    foreach ($hack in $knownHacks.Keys) {
-        foreach ($pattern in $knownHacks[$hack]["Patterns"]) {
-            if ($file.Name -match [regex]::Escape($pattern)) {
-                return @{Client=$hack; Source=$knownHacks[$hack]["Source"]}
+function Analyze-Jar($filePath){
+    $score = 0
+    $foundPatterns = @()
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($filePath)
+        foreach($entry in $zip.Entries){
+            foreach($pattern in $suspiciousPatterns){
+                if($entry.FullName -match $pattern){
+                    $score += 10
+                    $foundPatterns += $pattern
+                }
+            }
+        }
+        $zip.Dispose()
+    } catch {
+        Write-Host "Error leyendo $filePath" -ForegroundColor Yellow
+    }
+
+    # Detectar cliente probable
+    $detectedClient = $null
+    foreach($client in $knownSources.Keys){
+        foreach($pattern in $suspiciousPatterns){
+            if($foundPatterns -contains $pattern){
+                $detectedClient = $client
+                break
             }
         }
     }
-    return $null
+
+    # Detectar fuente de descarga
+    $source = "Internet"
+    try {
+        $zonePath = "$filePath`:Zone.Identifier"
+        if(Test-Path $zonePath){
+            $zoneContent = Get-Content $zonePath -ErrorAction SilentlyContinue
+            if($zoneContent -match "https?://([^`r`n]+)"){
+                $source = $matches[0]
+            }
+        }
+    } catch { }
+
+    # Clasificación
+    if($score -ge $scoreThreshold){
+        $category = "HACKED CLIENTS"
+        $color = "Red"
+    } elseif($score -gt 0){
+        $category = "SUSPICIOUS MODS"
+        $color = "Yellow"
+    } else {
+        $category = "VERIFIED MODS"
+        $color = "Green"
+    }
+
+    [PSCustomObject]@{
+        File = $filePath
+        Score = $score
+        DetectedClient = if($detectedClient){$detectedClient}else{"-"}
+        Patterns = if($foundPatterns.Count -gt 0){$foundPatterns -join ", "}else{"-"}
+        Source = $source
+        Category = $category
+        Color = $color
+    }
 }
 
-# Función para verificar si es un mod oficial (simplificado)
-function Is-VerifiedMod($file) {
-    # Solo ejemplo básico: archivos .jar con versión numérica y nombre oficial
-    if ($file.Name -match "\d+\.\d+\.\d+") { return $true }
-    return $false
-}
-
-# Escaneo principal
-$foundHacks = @()
-$foundVerified = @()
-
-foreach ($path in $scanPaths) {
-    if (-Not (Test-Path $path)) { continue }
-    $files = Get-ChildItem $path -Recurse -Filter *.jar -ErrorAction SilentlyContinue
-    foreach ($f in $files) {
-        $hackInfo = Get-HackInfo $f
-        if ($hackInfo) {
-            $foundHacks += @{
-                File = $f.FullName
-                Client = $hackInfo.Client
-                Modules = "Pattern Match"
-                Source = $hackInfo.Source
-            }
-        } elseif (Is-VerifiedMod $f) {
-            $foundVerified += @{
-                File = $f.FullName
-                Mod = $f.Name
-                Source = "Verified"
-            }
+# Escanear todos los directorios y .jar
+$results = @()
+foreach($path in $scanPaths){
+    if(Test-Path $path){
+        Get-ChildItem -Path $path -Recurse -Filter *.jar | ForEach-Object {
+            $results += Analyze-Jar $_.FullName
         }
     }
 }
 
 # Mostrar resultados
-Write-Host "`n┏━ HACKED CLIENTS ━━━━━━━━━━━━━━━━━━━" -ForegroundColor White
-foreach ($h in $foundHacks) {
-    Write-Host "File: $($h.File)" -ForegroundColor $colorHack
-    Write-Host "Detected Client: $($h.Client)" -ForegroundColor $colorHack
-    Write-Host "Modules: $($h.Modules)" -ForegroundColor $colorHack
-    Write-Host "Possible Source: $($h.Source)" -ForegroundColor $colorHack
-    Write-Host "-----------------------------------" -ForegroundColor White
+foreach($category in @("HACKED CLIENTS","SUSPICIOUS MODS","VERIFIED MODS")){
+    $categoryResults = $results | Where-Object {$_.Category -eq $category}
+    if($categoryResults.Count -gt 0){
+        Write-Host "`n┏━ $category ━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+        foreach($r in $categoryResults){
+            Write-Host "File: $($r.File)" -ForegroundColor $r.Color
+            Write-Host "Detected Client: $($r.DetectedClient)" -ForegroundColor $r.Color
+            Write-Host "Score: $($r.Score)" -ForegroundColor $r.Color
+            Write-Host "Patterns: $($r.Patterns)" -ForegroundColor $r.Color
+            Write-Host "Possible Source: $($r.Source)" -ForegroundColor $r.Color
+            Write-Host "-----------------------------------" -ForegroundColor Gray
+        }
+        Write-Host "┗" + "━" * 30
+    }
 }
-Write-Host "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`n" -ForegroundColor White
-
-Write-Host "┏━ VERIFIED MODS ━━━━━━━━━━━━━━━━━━━" -ForegroundColor White
-foreach ($v in $foundVerified) {
-    Write-Host "File: $($v.File)" -ForegroundColor $colorVerified
-    Write-Host "Verified Mod: $($v.Mod)" -ForegroundColor $colorVerified
-    Write-Host "Source: $($v.Source)" -ForegroundColor $colorVerified
     Write-Host "-----------------------------------" -ForegroundColor White
 }
 Write-Host "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`n" -ForegroundColor White
