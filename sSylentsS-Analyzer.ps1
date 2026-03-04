@@ -1,48 +1,71 @@
-# ================================
-# sSylentsS Analyzer 
-# ================================
+# ===============================
+# sSylentsS Analyzer v3
+# Detección avanzada real
+# ===============================
 
-$scanPath = "$env:APPDATA\.minecraft\mods"
+$scanPaths = @(
+    "$env:APPDATA\.minecraft",
+    "$env:USERPROFILE\Downloads",
+    "$env:USERPROFILE\Desktop",
+    "$env:TEMP"
+)
 
-# Clientes conocidos con identificadores reales
-$clientSignatures = @{
-    "Meteor" = @("meteordevelopment","meteorclient","systems/modules/combat","crystalaura","killaura")
-    "Wurst" = @("net/wurstclient","wurstclient","wurstplus")
+# Módulos reales de hack (no mixin)
+$realHackModules = @(
+    "killaura",
+    "crystalaura",
+    "triggerbot",
+    "aimbot",
+    "reach",
+    "velocity",
+    "flight",
+    "scaffold",
+    "bhop",
+    "speed",
+    "xray",
+    "freecam",
+    "autoarmor",
+    "autototem",
+    "automine",
+    "autopot"
+)
+
+# Firmas más profundas de clientes
+$clientIndicators = @{
+    "Meteor" = @("meteordevelopment","meteorclient","systems/modules")
+    "Wurst" = @("wurstclient","net/wurstclient")
     "Aristois" = @("me/deftware","aristois")
-    "Doomsday" = @("doomsdayclient","ddclient","ghostloader")
+    "Doomsday" = @("ghost","combat/aura","module/combat","ddclient")
 }
-
-$combatModules = @("killaura","aimbot","autoclicker","triggerbot","reach","velocity","critical")
-$movementModules = @("flight","scaffold","speed","bhop")
-$renderModules = @("xray","freecam")
-$utilityModules = @("autoarmor","autototem","automine","autopot")
 
 function Analyze-Jar {
     param($file)
 
-    $contentMatches = @{}
-    $detectedClient = $null
+    $foundModules = @{}
+    $foundClient = $null
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
+
     try {
         $zip = [System.IO.Compression.ZipFile]::OpenRead($file)
 
         foreach ($entry in $zip.Entries) {
+
             $name = $entry.FullName.ToLower()
 
-            # Detectar cliente
-            foreach ($client in $clientSignatures.Keys) {
-                foreach ($sig in $clientSignatures[$client]) {
+            # Detectar cliente por firmas
+            foreach ($client in $clientIndicators.Keys) {
+                foreach ($sig in $clientIndicators[$client]) {
                     if ($name -like "*$sig*") {
-                        $detectedClient = $client
+                        $foundClient = $client
                     }
                 }
             }
 
-            # Detectar módulos reales (solo 1 vez)
-            foreach ($mod in $combatModules + $movementModules + $renderModules + $utilityModules) {
+            # Detectar módulos reales (una sola vez)
+            foreach ($mod in $realHackModules) {
                 if ($name -like "*$mod*") {
-                    $contentMatches[$mod] = $true
+                    $foundModules[$mod] = $true
                 }
             }
         }
@@ -53,20 +76,24 @@ function Analyze-Jar {
 
     return [PSCustomObject]@{
         File = $file
-        Client = $detectedClient
-        Modules = $contentMatches.Keys
+        Client = $foundClient
+        Modules = $foundModules.Keys
     }
 }
 
 $results = @()
 
-Get-ChildItem $scanPath -Filter *.jar | ForEach-Object {
-    $results += Analyze-Jar $_.FullName
+foreach ($path in $scanPaths) {
+    if (Test-Path $path) {
+        Get-ChildItem $path -Recurse -Filter *.jar -ErrorAction SilentlyContinue | ForEach-Object {
+            $results += Analyze-Jar $_.FullName
+        }
+    }
 }
 
-# ================================
-# CATEGORÍAS
-# ================================
+# ===============================
+# Clasificación estilo Meow
+# ===============================
 
 $verified = @()
 $suspicious = @()
@@ -77,7 +104,8 @@ foreach ($r in $results) {
     if ($r.Client) {
         $hacked += $r
     }
-    elseif ($r.Modules.Count -gt 0) {
+    elseif ($r.Modules.Count -ge 2) {
+        # Si tiene múltiples módulos de combate/movimiento
         $suspicious += $r
     }
     else {
@@ -85,21 +113,20 @@ foreach ($r in $results) {
     }
 }
 
-# ================================
+# ===============================
 # OUTPUT LIMPIO
-# ================================
+# ===============================
 
-function Print-Section($title, $items, $color) {
-    if ($items.Count -eq 0) { return }
+function Print-Section($title,$items,$color){
+    if($items.Count -eq 0){return}
     Write-Host "`n┏━ $title ━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor $color
-    foreach ($i in $items) {
+    foreach($i in $items){
         Write-Host "File: $($i.File)" -ForegroundColor $color
-        if ($i.Client) {
+        if($i.Client){
             Write-Host "Detected Client: $($i.Client)" -ForegroundColor $color
-            Write-Host "Probable Source: https://$($i.Client.ToLower()).com" -ForegroundColor $color
         }
-        if ($i.Modules.Count -gt 0) {
-            Write-Host "Modules Found: $($i.Modules -join ', ')" -ForegroundColor $color
+        if($i.Modules.Count -gt 0){
+            Write-Host "Modules: $($i.Modules -join ', ')" -ForegroundColor $color
         }
         Write-Host "-----------------------------------" -ForegroundColor $color
     }
@@ -107,7 +134,10 @@ function Print-Section($title, $items, $color) {
 }
 
 Print-Section "VERIFIED MODS" $verified "Cyan"
-Print-Section "SUSPICIOUS MODS" $suspicious "Yellow"
+Print-Section "SUSPICIOUS FILES" $suspicious "Yellow"
+Print-Section "HACKED CLIENTS" $hacked "Red"
+
+Write-Host "`nScan Complete."
 Print-Section "HACKED CLIENTS" $hacked "Red"
 
 Write-Host "`nScan Complete."
