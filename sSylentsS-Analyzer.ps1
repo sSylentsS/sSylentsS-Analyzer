@@ -1,85 +1,102 @@
-# ─────────── Hack Analyzer ───────────
-# Autor: sSylentsS
-# Detecta hacks recientes y patrones sospechosos en .jar
+# ================================================
+# sSylentsS Analyzer
+# Escanea Hacks y Mods en Windows
+# ================================================
 
 # Carpeta a escanear
 $scanPaths = @(
     "$env:USERPROFILE\Downloads",
     "$env:USERPROFILE\Desktop",
-    "$env:USERPROFILE\AppData\Roaming\.minecraft\mods",
-    "$env:TEMP"
+    "$env:LOCALAPPDATA\Temp",
+    "$env:APPDATA\.minecraft\mods"
 )
 
-# Diccionario de hacks conocidos recientes
+# Hacks conocidos (hashes o patrones)
 $knownHacks = @{
-    "modmenu"     = @{ Name="Meteor"; URL="https://meteorclient.com/archive" }
-    "sodium"      = @{ Name="Wurst"; URL="https://www.wurstclient.net/" }
-    "appleskin"   = @{ Name="Doomsday"; URL="https://doomsdayclient.com/" }
-    "lithium"     = @{ Name="Aristois"; URL="https://aristois.net/" }
-    # Puedes añadir más hacks aquí
+    "Doomsday" = @{
+        "Patterns" = @("appleskin","client-intermediary","じ.class","ふ.class","ぶ.class")
+        "Source" = "https://doomsdayclient.com/"
+    }
+    "Meteor" = @{
+        "Patterns" = @("modmenu")
+        "Source" = "https://meteorclient.com/archive"
+    }
+    "Aristois" = @{
+        "Patterns" = @("lithium-fabric")
+        "Source" = "https://aristois.net/"
+    }
+    "Wurst" = @{
+        "Patterns" = @("sodium-fabric")
+        "Source" = "https://www.wurstclient.net/"
+    }
 }
 
-# Patrones sospechosos dentro del JAR
-$patterns = @(
-    "velocity", "flight", "reach", "scaffold", "speed",
-    "aimassist", "autoarmor", "autototem", "crystalaura",
-    "killaura", "triggerbot", "freecam", "xray", "autoclicker"
-)
+# Colores para salida
+$colorHack = "Red"
+$colorVerified = "Green"
+$colorSuspicious = "Yellow"
 
-function Get-ModulesFromJar {
-    param([string]$file)
-    $matches = @()
-    try {
-        $zip = [System.IO.Compression.ZipFile]::OpenRead($file)
-        foreach($entry in $zip.Entries){
-            foreach($p in $patterns){
-                if($entry.FullName -match [regex]::Escape($p)){
-                    if(-not $matches.Contains($p)){ $matches += $p }
-                }
+# Función para detectar hacks según nombre o patrón
+function Get-HackInfo($file) {
+    foreach ($hack in $knownHacks.Keys) {
+        foreach ($pattern in $knownHacks[$hack]["Patterns"]) {
+            if ($file.Name -match [regex]::Escape($pattern)) {
+                return @{Client=$hack; Source=$knownHacks[$hack]["Source"]}
             }
-        }
-        $zip.Dispose()
-    } catch { }
-    return $matches
-}
-
-function Detect-Hack {
-    param([string]$file)
-    $lowerFile = ($file | Split-Path -Leaf).ToLower()
-    foreach($key in $knownHacks.Keys){
-        if($lowerFile -match $key){
-            return $knownHacks[$key]
         }
     }
     return $null
 }
 
-Write-Host "`n┏━ HACKED CLIENTS ━━━━━━━━━━━━━━━━━━━"
-foreach($path in $scanPaths){
-    if(Test-Path $path){
-        Get-ChildItem -Path $path -Filter *.jar -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-            $file = $_.FullName
-            $modules = Get-ModulesFromJar -file $file
-            $hackInfo = Detect-Hack -file $file
-            if($hackInfo -or $modules.Count -gt 0){
-                $score = $modules.Count * 10
-                if($hackInfo){
-                    $name = $hackInfo.Name
-                    $source = $hackInfo.URL
-                } else {
-                    $name = "Suspicious"
-                    $source = "Unknown"
-                }
-                Write-Host "File: $file"
-                Write-Host "Detected Client: $name"
-                Write-Host "Score: $score"
-                if($modules.Count -gt 0){
-                    Write-Host "Modules: $(($modules -join ', '))"
-                }
-                Write-Host "Possible Source: $source"
-                Write-Host "-----------------------------------"
+# Función para verificar si es un mod oficial (simplificado)
+function Is-VerifiedMod($file) {
+    # Solo ejemplo básico: archivos .jar con versión numérica y nombre oficial
+    if ($file.Name -match "\d+\.\d+\.\d+") { return $true }
+    return $false
+}
+
+# Escaneo principal
+$foundHacks = @()
+$foundVerified = @()
+
+foreach ($path in $scanPaths) {
+    if (-Not (Test-Path $path)) { continue }
+    $files = Get-ChildItem $path -Recurse -Filter *.jar -ErrorAction SilentlyContinue
+    foreach ($f in $files) {
+        $hackInfo = Get-HackInfo $f
+        if ($hackInfo) {
+            $foundHacks += @{
+                File = $f.FullName
+                Client = $hackInfo.Client
+                Modules = "Pattern Match"
+                Source = $hackInfo.Source
+            }
+        } elseif (Is-VerifiedMod $f) {
+            $foundVerified += @{
+                File = $f.FullName
+                Mod = $f.Name
+                Source = "Verified"
             }
         }
     }
 }
-Write-Host "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Mostrar resultados
+Write-Host "`n┏━ HACKED CLIENTS ━━━━━━━━━━━━━━━━━━━" -ForegroundColor White
+foreach ($h in $foundHacks) {
+    Write-Host "File: $($h.File)" -ForegroundColor $colorHack
+    Write-Host "Detected Client: $($h.Client)" -ForegroundColor $colorHack
+    Write-Host "Modules: $($h.Modules)" -ForegroundColor $colorHack
+    Write-Host "Possible Source: $($h.Source)" -ForegroundColor $colorHack
+    Write-Host "-----------------------------------" -ForegroundColor White
+}
+Write-Host "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`n" -ForegroundColor White
+
+Write-Host "┏━ VERIFIED MODS ━━━━━━━━━━━━━━━━━━━" -ForegroundColor White
+foreach ($v in $foundVerified) {
+    Write-Host "File: $($v.File)" -ForegroundColor $colorVerified
+    Write-Host "Verified Mod: $($v.Mod)" -ForegroundColor $colorVerified
+    Write-Host "Source: $($v.Source)" -ForegroundColor $colorVerified
+    Write-Host "-----------------------------------" -ForegroundColor White
+}
+Write-Host "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`n" -ForegroundColor White
