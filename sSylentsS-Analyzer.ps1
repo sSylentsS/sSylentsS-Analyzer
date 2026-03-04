@@ -1,6 +1,5 @@
 # =========================================
-# sSylentsS Analyzer
-# File Analysis Only - Advanced Detection
+# sSylentsS Analyzer - Stable Final
 # =========================================
 
 $scanPaths = @(
@@ -10,58 +9,68 @@ $scanPaths = @(
     "$env:TEMP"
 )
 
-$ignorePatterns = @(
+$ignoreFolders = @(
     "\libraries\",
     "\versions\",
-    "\remappedJars\",
-    "client-intermediary",
-    "forge-",
-    "fabric-loader",
-    "minecraft-"
+    "\remappedJars\"
 )
-
-# ===============================
-# EDITABLE HASH DATABASE (SHA256)
-# ===============================
-$hashDatabase = @{
-    # "SHA256HASH" = "ClientName"
-}
-
-# ===============================
-# Pattern Score System
-# ===============================
-$patternWeights = @{
-    "killaura" = 6
-    "crystalaura" = 6
-    "triggerbot" = 5
-    "autoarmor" = 4
-    "autototem" = 4
-    "scaffold" = 4
-    "aimassist" = 5
-    "reach" = 1
-    "speed" = 1
-    "flight" = 2
-    "velocity" = 2
-}
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
+$strongPatterns = @(
+    "killaura",
+    "crystalaura",
+    "triggerbot",
+    "autototem",
+    "autoarmor",
+    "aimassist",
+    "scaffold"
+)
+
 function Should-Ignore($path){
-    foreach($pattern in $ignorePatterns){
-        if($path -match $pattern){ return $true }
+    $lower = $path.ToLower()
+
+    foreach($folder in $ignoreFolders){
+        if($lower.Contains($folder)){ return $true }
     }
+
     return $false
 }
 
-function Get-ZoneScore($file){
-    try{
-        $zone = Get-Content "$file`:Zone.Identifier" -ErrorAction Stop
-        $zoneText = $zone -join " "
-        if($zoneText -match "discord|mediafire|mega|dropbox"){
-            return 3
+function Get-SourceInfo($file){
+
+    $zonePath = "$file`:Zone.Identifier"
+
+    if(Test-Path $zonePath){
+        try{
+            $zone = Get-Content $zonePath -ErrorAction Stop
+            $zoneText = $zone -join " "
+
+            if($zoneText -match "discord"){
+                return "Discord"
+            }
+            elseif($zoneText -match "mediafire"){
+                return "MediaFire"
+            }
+            elseif($zoneText -match "mega"){
+                return "Mega"
+            }
+            elseif($zoneText -match "dropbox"){
+                return "Dropbox"
+            }
+            elseif($zoneText -match "browser"){
+                return "Web Browser"
+            }
+            else{
+                return "Internet Download"
+            }
         }
-    } catch {}
-    return 0
+        catch{
+            return "Unknown"
+        }
+    }
+
+    return "Unknown"
 }
 
 function Analyze-Jar {
@@ -69,35 +78,20 @@ function Analyze-Jar {
 
     if(Should-Ignore $file){ return $null }
 
+    $patternsFound = @()
     $score = 0
-    $detectedPatterns = @()
 
-    # ---------------- HASH CHECK ----------------
-    try{
-        $hash = (Get-FileHash $file -Algorithm SHA256).Hash
-        if($hashDatabase.ContainsKey($hash)){
-            return [PSCustomObject]@{
-                File = $file
-                Client = $hashDatabase[$hash]
-                Score = 100
-                Confidence = "HIGH (Hash Match)"
-                Patterns = @()
-            }
-        }
-    } catch {}
-
-    # ---------------- CONTENT ANALYSIS ----------------
     try{
         $zip = [System.IO.Compression.ZipFile]::OpenRead($file)
 
         foreach($entry in $zip.Entries){
             $name = $entry.FullName.ToLower()
 
-            foreach($pattern in $patternWeights.Keys){
-                if($name -like "*$pattern*"){
-                    if(-not $detectedPatterns.Contains($pattern)){
-                        $detectedPatterns += $pattern
-                        $score += $patternWeights[$pattern]
+            foreach($pattern in $strongPatterns){
+                if($name.Contains($pattern)){
+                    if(-not $patternsFound.Contains($pattern)){
+                        $patternsFound += $pattern
+                        $score += 10
                     }
                 }
             }
@@ -107,11 +101,11 @@ function Analyze-Jar {
                 $content = $reader.ReadToEnd().ToLower()
                 $reader.Close()
 
-                foreach($pattern in $patternWeights.Keys){
-                    if($content -like "*$pattern*"){
-                        if(-not $detectedPatterns.Contains($pattern)){
-                            $detectedPatterns += $pattern
-                            $score += $patternWeights[$pattern]
+                foreach($pattern in $strongPatterns){
+                    if($content.Contains($pattern)){
+                        if(-not $patternsFound.Contains($pattern)){
+                            $patternsFound += $pattern
+                            $score += 10
                         }
                     }
                 }
@@ -119,29 +113,17 @@ function Analyze-Jar {
         }
 
         $zip.Dispose()
-    } catch {}
-
-    # ---------------- ZONE IDENTIFIER ----------------
-    $score += Get-ZoneScore $file
-
-    # ---------------- CLASSIFICATION ----------------
-    if($score -ge 18){
-        return [PSCustomObject]@{
-            File = $file
-            Client = "Unknown"
-            Score = $score
-            Confidence = "HIGH (Pattern Score)"
-            Patterns = $detectedPatterns
-        }
+    }
+    catch{
+        return $null
     }
 
-    if($score -ge 10){
+    if($patternsFound.Count -ge 2){
         return [PSCustomObject]@{
             File = $file
-            Client = "Unknown"
             Score = $score
-            Confidence = "MEDIUM (Suspicious Patterns)"
-            Patterns = $detectedPatterns
+            Modules = $patternsFound
+            Source = Get-SourceInfo $file
         }
     }
 
@@ -159,25 +141,20 @@ foreach($path in $scanPaths){
     }
 }
 
-$hacked = $results | Where-Object { $_.Score -ge 18 }
-$suspicious = $results | Where-Object { $_.Score -lt 18 }
-
-function Print-Section($title,$items,$color){
-    if($items.Count -eq 0){ return }
-    Write-Host "`n┏━ $title ━━━━━━━━━━━━━━━━━━━" -ForegroundColor $color
-    foreach($i in $items){
-        Write-Host "File: $($i.File)" -ForegroundColor $color
-        Write-Host "Score: $($i.Score)" -ForegroundColor $color
-        Write-Host "Confidence: $($i.Confidence)" -ForegroundColor $color
-        if($i.Patterns.Count -gt 0){
-            Write-Host "Patterns: $($i.Patterns -join ', ')" -ForegroundColor $color
-        }
-        Write-Host "-----------------------------------" -ForegroundColor $color
-    }
-    Write-Host "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor $color
+if($results.Count -eq 0){
+    Write-Host "`nNo hacked clients detected." -ForegroundColor Green
+    return
 }
 
-Print-Section "HACKED CLIENTS" $hacked "Red"
-Print-Section "SUSPICIOUS FILES" $suspicious "Yellow"
+Write-Host "`n┏━ HACKED CLIENTS ━━━━━━━━━━━━━━━━━━━" -ForegroundColor Red
 
+foreach($r in $results){
+    Write-Host "File: $($r.File)" -ForegroundColor Red
+    Write-Host "Score: $($r.Score)" -ForegroundColor Red
+    Write-Host "Modules: $($r.Modules -join ', ')" -ForegroundColor Red
+    Write-Host "Possible Source: $($r.Source)" -ForegroundColor Red
+    Write-Host "-----------------------------------" -ForegroundColor Red
+}
+
+Write-Host "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Red
 Write-Host "`nScan Complete."
