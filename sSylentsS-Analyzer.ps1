@@ -3,7 +3,7 @@
 # ======================================================
 
 # -------------------------------
-# Configuración de rutas
+# Configuración de rutas a escanear
 # -------------------------------
 $scanPaths = @(
     "$env:APPDATA\.minecraft\mods",
@@ -144,19 +144,48 @@ $finalReport += Scan-Prefetch
 $finalReport += Scan-JavaProcesses
 
 # -------------------------------
-# Mostrar resultados en colores
+# Impresión legible estilo MeowModAnalyzer
 # -------------------------------
 Write-Host "`n===== sSylentsS Analyzer Report =====`n" -ForegroundColor Cyan
-foreach($item in $finalReport | Sort-Object RiskScore -Descending){
-    switch($item.Status){
-        "HACKED CLIENT" { $color="Red" }
-        "GHOST CLIENT" { $color="Magenta" }
-        "SUSPICIOUS MOD" { $color="Yellow" }
-        "LOADER / PREFETCH" { $color="DarkRed" }
-        "SAFE" { $color="Green" }
-        "LEGIT MOD" { $color="Cyan" }
-        default { $color="White" }
+
+$verified = $finalReport | Where-Object { $_.Status -eq "LEGIT MOD" }
+$unknown = $finalReport | Where-Object { $_.Status -eq "SAFE" -and $_.Notes.Count -gt 0 }
+$suspicious = $finalReport | Where-Object { $_.Status -eq "SUSPICIOUS MOD" }
+$hacks = $finalReport | Where-Object { $_.Status -eq "HACKED CLIENT" }
+$ghost = $finalReport | Where-Object { $_.Status -eq "GHOST CLIENT" }
+$loader = $finalReport | Where-Object { $_.Status -eq "LOADER / PREFETCH" }
+
+function Print-Block($title, $list, $color){
+    if($list.Count -eq 0){ return }
+    Write-Host "┏━ $title ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor $color
+    foreach($item in $list){
+        Write-Host "File: $($item.File)" -ForegroundColor $color
+        if($item.Notes.Count -gt 0){
+            Write-Host "Detected Patterns:" -ForegroundColor $color
+            foreach($note in $item.Notes){ Write-Host "  • $note" -ForegroundColor $color }
+        }
+        Write-Host "---------------------------------------" -ForegroundColor $color
     }
+    Write-Host "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor $color
+}
+
+Print-Block "VERIFIED MODS" $verified "Cyan"
+Print-Block "UNKNOWN MODS" $unknown "White"
+Print-Block "SUSPICIOUS MODS" $suspicious "Yellow"
+Print-Block "HACKED CLIENTS" $hacks "Red"
+Print-Block "GHOST CLIENTS" $ghost "Magenta"
+Print-Block "LOADERS / PREFETCH" $loader "DarkRed"
+
+# Resumen final
+Write-Host "`nSummary:" -ForegroundColor Cyan
+Write-Host ("Total scanned: {0}" -f $finalReport.Count) -ForegroundColor Cyan
+Write-Host ("Verified: {0}" -f $verified.Count) -ForegroundColor Cyan
+Write-Host ("Unknown: {0}" -f $unknown.Count) -ForegroundColor Cyan
+Write-Host ("Suspicious: {0}" -f $suspicious.Count) -ForegroundColor Cyan
+Write-Host ("Hacked Clients: {0}" -f $hacks.Count) -ForegroundColor Cyan
+Write-Host ("Ghost Clients: {0}" -f $ghost.Count) -ForegroundColor Cyan
+Write-Host ("Loaders / Prefetch: {0}" -f $loader.Count) -ForegroundColor Cyan
+Write-Host "`n=====================================`n" -ForegroundColor Cyan
     Write-Host ("{0,-50} | {1,-15} | {2}" -f $item.File, $item.Status, ($item.Notes -join ", ")) -ForegroundColor $color
 }
 Write-Host "`n=====================================`n" -ForegroundColor Cyan
