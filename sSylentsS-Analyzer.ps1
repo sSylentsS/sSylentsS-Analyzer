@@ -1,6 +1,8 @@
 # =========================================
-# sSylentsS Analyzer - Stable Final
+# sSylentsS Analyzer - Clean Architecture
 # =========================================
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $scanPaths = @(
     "$env:APPDATA\.minecraft\mods",
@@ -8,14 +10,6 @@ $scanPaths = @(
     "$env:USERPROFILE\Desktop",
     "$env:TEMP"
 )
-
-$ignoreFolders = @(
-    "\libraries\",
-    "\versions\",
-    "\remappedJars\"
-)
-
-Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $strongPatterns = @(
     "killaura",
@@ -27,59 +21,27 @@ $strongPatterns = @(
     "scaffold"
 )
 
-function Should-Ignore($path){
-    $lower = $path.ToLower()
-
-    foreach($folder in $ignoreFolders){
-        if($lower.Contains($folder)){ return $true }
-    }
-
-    return $false
-}
-
 function Get-SourceInfo($file){
-
     $zonePath = "$file`:Zone.Identifier"
 
     if(Test-Path $zonePath){
         try{
             $zone = Get-Content $zonePath -ErrorAction Stop
-            $zoneText = $zone -join " "
-
-            if($zoneText -match "discord"){
-                return "Discord"
-            }
-            elseif($zoneText -match "mediafire"){
-                return "MediaFire"
-            }
-            elseif($zoneText -match "mega"){
-                return "Mega"
-            }
-            elseif($zoneText -match "dropbox"){
-                return "Dropbox"
-            }
-            elseif($zoneText -match "browser"){
-                return "Web Browser"
-            }
-            else{
-                return "Internet Download"
-            }
-        }
-        catch{
-            return "Unknown"
-        }
+            $text = $zone -join " "
+            if($text -match "discord"){ return "Discord" }
+            if($text -match "mediafire"){ return "MediaFire" }
+            if($text -match "mega"){ return "Mega" }
+            if($text -match "dropbox"){ return "Dropbox" }
+            return "Internet"
+        } catch { return "Unknown" }
     }
 
     return "Unknown"
 }
 
-function Analyze-Jar {
-    param($file)
-
-    if(Should-Ignore $file){ return $null }
+function Analyze-Jar($file){
 
     $patternsFound = @()
-    $score = 0
 
     try{
         $zip = [System.IO.Compression.ZipFile]::OpenRead($file)
@@ -91,22 +53,6 @@ function Analyze-Jar {
                 if($name.Contains($pattern)){
                     if(-not $patternsFound.Contains($pattern)){
                         $patternsFound += $pattern
-                        $score += 10
-                    }
-                }
-            }
-
-            if($name -eq "fabric.mod.json"){
-                $reader = New-Object System.IO.StreamReader($entry.Open())
-                $content = $reader.ReadToEnd().ToLower()
-                $reader.Close()
-
-                foreach($pattern in $strongPatterns){
-                    if($content.Contains($pattern)){
-                        if(-not $patternsFound.Contains($pattern)){
-                            $patternsFound += $pattern
-                            $score += 10
-                        }
                     }
                 }
             }
@@ -121,8 +67,8 @@ function Analyze-Jar {
     if($patternsFound.Count -ge 2){
         return [PSCustomObject]@{
             File = $file
-            Score = $score
             Modules = $patternsFound
+            Score = $patternsFound.Count * 10
             Source = Get-SourceInfo $file
         }
     }
@@ -132,10 +78,15 @@ function Analyze-Jar {
 
 $results = @()
 
-foreach($path in $scanPaths){
-    if(Test-Path $path){
-        Get-ChildItem $path -Recurse -Filter *.jar -ErrorAction SilentlyContinue | ForEach-Object{
-            $r = Analyze-Jar $_.FullName
+foreach($basePath in $scanPaths){
+
+    if(Test-Path $basePath){
+
+        # SOLO JARS DIRECTOS (sin recurse infinito)
+        $jars = Get-ChildItem $basePath -Filter *.jar -File -ErrorAction SilentlyContinue
+
+        foreach($jar in $jars){
+            $r = Analyze-Jar $jar.FullName
             if($r){ $results += $r }
         }
     }
