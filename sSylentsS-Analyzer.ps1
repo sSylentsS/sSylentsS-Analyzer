@@ -1,27 +1,47 @@
 # ======================================================
-# sSylentsS Analyzer - Anti-Cheat Profundo
+# sSylentsS Analyzer - Anti-Cheat Profundo Avanzado
 # ======================================================
 
-# Paths
-$modsPath = "$env:APPDATA\.minecraft\mods"
-$tempPaths = @("$env:TEMP","$env:APPDATA\Roaming")
+# -------------------------------
+# Configuración de rutas
+# -------------------------------
+$scanPaths = @(
+    "$env:APPDATA\.minecraft\mods",
+    "$env:TEMP",
+    "$env:APPDATA\Roaming",
+    "$env:USERPROFILE\Downloads",
+    "$env:USERPROFILE\Desktop"
+)
 $prefetchPath = "C:\Windows\Prefetch"
 $hashPath = ".\hashes"
 
-# Cargar hashes conocidos
+# -------------------------------
+# Hashes conocidos
+# -------------------------------
 $verifiedHashes = @()
 $hackedHashes = @()
 if(Test-Path "$hashPath\verified_mods.json"){ $verifiedHashes = Get-Content "$hashPath\verified_mods.json" | ConvertFrom-Json }
 if(Test-Path "$hashPath\hacked_clients.json"){ $hackedHashes = Get-Content "$hashPath\hacked_clients.json" | ConvertFrom-Json }
 
-# Patrones sospechosos
+# -------------------------------
+# Patrones internos por nivel de riesgo
+# -------------------------------
 $patterns = @{
-    High = @("killaura","aimbot","autoclicker","reach","velocity","criticals")
-    Medium = @("inject","hook","javaagent","transformer","packet","premain-class","agent-class","xbootclasspath")
+    High = @(
+        "killaura","aimbot","autoclicker","triggerbot","velocity","critical","autototem","autocrystal",
+        "automine","autopot","autoarmor","flight","reach","freecam","xray","scaffold","cheststeal",
+        "discord","friends","imgui"
+    )
+    Medium = @(
+        "inject","hook","javaagent","transformer","premain-class","agent-class","xbootclasspath",
+        "clientplayerinteractionmanagermixin","keyboardmixin","clientplayerinteractionmanageraccessor"
+    )
     Low = @("mixin","event","listener")
 }
 
-# Whitelist mods legítimos
+# -------------------------------
+# Whitelist de mods legítimos
+# -------------------------------
 $whitelistMods = @("fabric","forge","optifine","sodium","lithium","iris","architectury","cloth-config")
 
 # -------------------------------
@@ -31,6 +51,7 @@ function Get-FileSHA256($file){ if(Test-Path $file){ return (Get-FileHash -Algor
 
 function Analyze-JAR($file){
     $result = @{File=$file; Status="SAFE"; RiskScore=0; Notes=@()}
+
     if(-not(Test-Path $file)){ $result.Status="ELIMINADO"; $result.Notes+="Archivo borrado"; return $result }
 
     $hash = Get-FileSHA256 $file
@@ -54,10 +75,40 @@ function Analyze-JAR($file){
         $zip.Dispose()
     }catch{$result.Notes+="No se pudo analizar el JAR"}
 
+    # Escaneo profundo de archivos extraídos
+    try{
+        $tempDir=Join-Path $env:TEMP ([GUID]::NewGuid().ToString())
+        New-Item -ItemType Directory -Path $tempDir | Out-Null
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($file,$tempDir)
+        Get-ChildItem $tempDir -Recurse | ForEach-Object {
+            foreach($lvl in $patterns.Keys){
+                foreach($pat in $patterns[$lvl]){
+                    if ($_.Name -match $pat) {
+                        switch($lvl){ High{$result.RiskScore+=50} Medium{$result.RiskScore+=30} Low{$result.RiskScore+=5} }
+                        $result.Notes+=" $($_.FullName)"
+                    }
+                }
+            }
+        }
+        Remove-Item $tempDir -Recurse -Force
+    }catch{$result.Notes+="No se pudo analizar archivos internos"}
+
     if($result.RiskScore -ge 60){$result.Status="HACKED CLIENT"}
     elseif($result.RiskScore -ge 30){$result.Status="SUSPICIOUS MOD"}
 
     return $result
+}
+
+function Scan-Folders(){
+    $results=@()
+    foreach($path in $scanPaths){
+        if(Test-Path $path){
+            Get-ChildItem -Path $path -Recurse -Filter *.jar -Force | ForEach-Object{
+                $results+=[PSCustomObject]$(Analyze-JAR $_.FullName)
+            }
+        }
+    }
+    return $results
 }
 
 function Scan-Prefetch(){
@@ -84,28 +135,17 @@ function Scan-JavaProcesses(){
     return $results
 }
 
-function Scan-Temp(){
-    $results=@()
-    foreach($path in $tempPaths){
-        if(Test-Path $path){
-            Get-ChildItem -Path $path -Recurse -Force | Where-Object { $_.Name -match "loader|vape|novoline|doomsday" } | ForEach-Object{
-                $results+=[PSCustomObject]@{File=$_.FullName; Status="SUSPICIOUS / TEMP"; RiskScore=30; Notes="Archivo sospechoso"}
-            }
-        }
-    }
-    return $results
-}
-
 # -------------------------------
 # Ejecución principal
 # -------------------------------
 $finalReport=@()
-Get-ChildItem -Path $modsPath -Filter *.jar | ForEach-Object{ $finalReport += Analyze-JAR $_.FullName }
+$finalReport += Scan-Folders
 $finalReport += Scan-Prefetch
 $finalReport += Scan-JavaProcesses
-$finalReport += Scan-Temp
 
-# Mostrar resultados en consola con colores
+# -------------------------------
+# Mostrar resultados en colores
+# -------------------------------
 Write-Host "`n===== sSylentsS Analyzer Report =====`n" -ForegroundColor Cyan
 foreach($item in $finalReport | Sort-Object RiskScore -Descending){
     switch($item.Status){
@@ -113,7 +153,6 @@ foreach($item in $finalReport | Sort-Object RiskScore -Descending){
         "GHOST CLIENT" { $color="Magenta" }
         "SUSPICIOUS MOD" { $color="Yellow" }
         "LOADER / PREFETCH" { $color="DarkRed" }
-        "SUSPICIOUS / TEMP" { $color="DarkYellow" }
         "SAFE" { $color="Green" }
         "LEGIT MOD" { $color="Cyan" }
         default { $color="White" }
