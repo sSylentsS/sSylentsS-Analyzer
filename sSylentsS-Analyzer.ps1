@@ -140,5 +140,4 @@ foreach($category in @("HACKED CLIENTS","SUSPICIOUS MODS","VERIFIED MODS")){
     }
 }
     Write-Host "-----------------------------------" -ForegroundColor White
-}
 Write-Host "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`n" -ForegroundColor White
