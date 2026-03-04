@@ -1,6 +1,5 @@
 # ================================
-# sSylentsS Analyzer v2 PRO
-# Estilo MeowModAnalyzer
+# sSylentsS Analyzer 
 # ================================
 
 $scanPath = "$env:APPDATA\.minecraft\mods"
