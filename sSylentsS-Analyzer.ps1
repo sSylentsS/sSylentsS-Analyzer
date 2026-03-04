@@ -1,143 +1,183 @@
-# ===============================
-# sSylentsS Analyzer v3
-# Detección avanzada real
-# ===============================
+# =========================================
+# sSylentsS Analyzer
+# File Analysis Only - Advanced Detection
+# =========================================
 
 $scanPaths = @(
-    "$env:APPDATA\.minecraft",
+    "$env:APPDATA\.minecraft\mods",
     "$env:USERPROFILE\Downloads",
     "$env:USERPROFILE\Desktop",
     "$env:TEMP"
 )
 
-# Módulos reales de hack (no mixin)
-$realHackModules = @(
-    "killaura",
-    "crystalaura",
-    "triggerbot",
-    "aimbot",
-    "reach",
-    "velocity",
-    "flight",
-    "scaffold",
-    "bhop",
-    "speed",
-    "xray",
-    "freecam",
-    "autoarmor",
-    "autototem",
-    "automine",
-    "autopot"
+$ignorePatterns = @(
+    "\libraries\",
+    "\versions\",
+    "\remappedJars\",
+    "client-intermediary",
+    "forge-",
+    "fabric-loader",
+    "minecraft-"
 )
 
-# Firmas más profundas de clientes
-$clientIndicators = @{
-    "Meteor" = @("meteordevelopment","meteorclient","systems/modules")
-    "Wurst" = @("wurstclient","net/wurstclient")
-    "Aristois" = @("me/deftware","aristois")
-    "Doomsday" = @("ghost","combat/aura","module/combat","ddclient")
+# ===============================
+# EDITABLE HASH DATABASE (SHA256)
+# ===============================
+$hashDatabase = @{
+    # "SHA256HASH" = "ClientName"
+}
+
+# ===============================
+# Pattern Score System
+# ===============================
+$patternWeights = @{
+    "killaura" = 6
+    "crystalaura" = 6
+    "triggerbot" = 5
+    "autoarmor" = 4
+    "autototem" = 4
+    "scaffold" = 4
+    "aimassist" = 5
+    "reach" = 1
+    "speed" = 1
+    "flight" = 2
+    "velocity" = 2
+}
+
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+function Should-Ignore($path){
+    foreach($pattern in $ignorePatterns){
+        if($path -match $pattern){ return $true }
+    }
+    return $false
+}
+
+function Get-ZoneScore($file){
+    try{
+        $zone = Get-Content "$file`:Zone.Identifier" -ErrorAction Stop
+        $zoneText = $zone -join " "
+        if($zoneText -match "discord|mediafire|mega|dropbox"){
+            return 3
+        }
+    } catch {}
+    return 0
 }
 
 function Analyze-Jar {
     param($file)
 
-    $foundModules = @{}
-    $foundClient = $null
+    if(Should-Ignore $file){ return $null }
 
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $score = 0
+    $detectedPatterns = @()
 
-    try {
+    # ---------------- HASH CHECK ----------------
+    try{
+        $hash = (Get-FileHash $file -Algorithm SHA256).Hash
+        if($hashDatabase.ContainsKey($hash)){
+            return [PSCustomObject]@{
+                File = $file
+                Client = $hashDatabase[$hash]
+                Score = 100
+                Confidence = "HIGH (Hash Match)"
+                Patterns = @()
+            }
+        }
+    } catch {}
+
+    # ---------------- CONTENT ANALYSIS ----------------
+    try{
         $zip = [System.IO.Compression.ZipFile]::OpenRead($file)
 
-        foreach ($entry in $zip.Entries) {
-
+        foreach($entry in $zip.Entries){
             $name = $entry.FullName.ToLower()
 
-            # Detectar cliente por firmas
-            foreach ($client in $clientIndicators.Keys) {
-                foreach ($sig in $clientIndicators[$client]) {
-                    if ($name -like "*$sig*") {
-                        $foundClient = $client
+            foreach($pattern in $patternWeights.Keys){
+                if($name -like "*$pattern*"){
+                    if(-not $detectedPatterns.Contains($pattern)){
+                        $detectedPatterns += $pattern
+                        $score += $patternWeights[$pattern]
                     }
                 }
             }
 
-            # Detectar módulos reales (una sola vez)
-            foreach ($mod in $realHackModules) {
-                if ($name -like "*$mod*") {
-                    $foundModules[$mod] = $true
+            if($name -eq "fabric.mod.json"){
+                $reader = New-Object System.IO.StreamReader($entry.Open())
+                $content = $reader.ReadToEnd().ToLower()
+                $reader.Close()
+
+                foreach($pattern in $patternWeights.Keys){
+                    if($content -like "*$pattern*"){
+                        if(-not $detectedPatterns.Contains($pattern)){
+                            $detectedPatterns += $pattern
+                            $score += $patternWeights[$pattern]
+                        }
+                    }
                 }
             }
         }
 
         $zip.Dispose()
-    }
-    catch { }
+    } catch {}
 
-    return [PSCustomObject]@{
-        File = $file
-        Client = $foundClient
-        Modules = $foundModules.Keys
+    # ---------------- ZONE IDENTIFIER ----------------
+    $score += Get-ZoneScore $file
+
+    # ---------------- CLASSIFICATION ----------------
+    if($score -ge 18){
+        return [PSCustomObject]@{
+            File = $file
+            Client = "Unknown"
+            Score = $score
+            Confidence = "HIGH (Pattern Score)"
+            Patterns = $detectedPatterns
+        }
     }
+
+    if($score -ge 10){
+        return [PSCustomObject]@{
+            File = $file
+            Client = "Unknown"
+            Score = $score
+            Confidence = "MEDIUM (Suspicious Patterns)"
+            Patterns = $detectedPatterns
+        }
+    }
+
+    return $null
 }
 
 $results = @()
 
-foreach ($path in $scanPaths) {
-    if (Test-Path $path) {
-        Get-ChildItem $path -Recurse -Filter *.jar -ErrorAction SilentlyContinue | ForEach-Object {
-            $results += Analyze-Jar $_.FullName
+foreach($path in $scanPaths){
+    if(Test-Path $path){
+        Get-ChildItem $path -Recurse -Filter *.jar -ErrorAction SilentlyContinue | ForEach-Object{
+            $r = Analyze-Jar $_.FullName
+            if($r){ $results += $r }
         }
     }
 }
 
-# ===============================
-# Clasificación estilo Meow
-# ===============================
-
-$verified = @()
-$suspicious = @()
-$hacked = @()
-
-foreach ($r in $results) {
-
-    if ($r.Client) {
-        $hacked += $r
-    }
-    elseif ($r.Modules.Count -ge 2) {
-        # Si tiene múltiples módulos de combate/movimiento
-        $suspicious += $r
-    }
-    else {
-        $verified += $r
-    }
-}
-
-# ===============================
-# OUTPUT LIMPIO
-# ===============================
+$hacked = $results | Where-Object { $_.Score -ge 18 }
+$suspicious = $results | Where-Object { $_.Score -lt 18 }
 
 function Print-Section($title,$items,$color){
-    if($items.Count -eq 0){return}
-    Write-Host "`n┏━ $title ━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor $color
+    if($items.Count -eq 0){ return }
+    Write-Host "`n┏━ $title ━━━━━━━━━━━━━━━━━━━" -ForegroundColor $color
     foreach($i in $items){
         Write-Host "File: $($i.File)" -ForegroundColor $color
-        if($i.Client){
-            Write-Host "Detected Client: $($i.Client)" -ForegroundColor $color
-        }
-        if($i.Modules.Count -gt 0){
-            Write-Host "Modules: $($i.Modules -join ', ')" -ForegroundColor $color
+        Write-Host "Score: $($i.Score)" -ForegroundColor $color
+        Write-Host "Confidence: $($i.Confidence)" -ForegroundColor $color
+        if($i.Patterns.Count -gt 0){
+            Write-Host "Patterns: $($i.Patterns -join ', ')" -ForegroundColor $color
         }
         Write-Host "-----------------------------------" -ForegroundColor $color
     }
-    Write-Host "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor $color
+    Write-Host "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor $color
 }
 
-Print-Section "VERIFIED MODS" $verified "Cyan"
+Print-Section "HACKED CLIENTS" $hacked "Red"
 Print-Section "SUSPICIOUS FILES" $suspicious "Yellow"
-Print-Section "HACKED CLIENTS" $hacked "Red"
-
-Write-Host "`nScan Complete."
-Print-Section "HACKED CLIENTS" $hacked "Red"
 
 Write-Host "`nScan Complete."
